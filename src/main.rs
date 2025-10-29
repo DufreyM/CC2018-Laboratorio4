@@ -4,19 +4,19 @@ mod line;
 mod obj_loader;
 mod shader;
 mod triangle;
-mod procedural_geometry;
+mod geometria;
 
 use raylib::prelude::*;
 use framebuffer::Framebuffer;
 use obj_loader::ObjModel;
 use triangle::ShaderType;
-use procedural_geometry::{generate_moon, generate_rings, transform_model};
+use geometria::{generate_moon, generate_rings, transform_model};
 use std::f32::consts::PI;
 
 fn main() {
     let (mut window, thread) = raylib::init()
         .size(800, 600)
-        .title("Laboratorio 4")
+        .title("Laboratorio 4 - Cuerpos Celestes Procedurales")
         .build();
 
     let mut fb = Framebuffer::new(800, 600, Color::new(5, 5, 15, 255));
@@ -25,7 +25,8 @@ fn main() {
     let model_sphere = ObjModel::load("sphere-1.obj")
         .expect("No se pudo cargar sphere-1.obj");
 
-    let model_crystal = ObjModel::load("crystal_planet.obj").unwrap_or_else(|_| model_sphere.clone());
+    let model_crystal = ObjModel::load("crystal_planet.obj")
+        .unwrap_or_else(|_| model_sphere.clone());
 
     let moon_model = generate_moon(0.3, 24);
     let rings_model = generate_rings(1.35, 2.1, 128);
@@ -46,11 +47,11 @@ fn main() {
     window.set_target_fps(60);
 
     let planet_names = vec![
-        "Steinbruch (Rocoso + Luna)",
-        "Ätherblase (Gigante Gaseoso + Anillos)",
-        "Kristallschloss (Cristal)",
-        "Feuerglut (Lava)",
-        "Eispalast (Hielo)",
+        "Rocos",
+        "Gaseoso",
+        "Adicional",
+        "Puntos Extra",
+        "Puntos Extra",
     ];
 
     let planet_models = vec![
@@ -62,32 +63,56 @@ fn main() {
     ];
 
     println!("\n=== CONTROLES ===");
-    println!("1-5: Cambiar planeta | SPACE: Auto-rotar | Q/E: Zoom | ←→: Rotar manual | S: Guardar captura");
+    println!("TAB: Cambiar planeta | P: Pausar rotación | W/S: Zoom | A/D: Rotar | R: Reiniciar | C: Captura");
 
     while !window.window_should_close() {
         fb.clear();
         time += 0.016;
         orbital_angle += 0.02;
 
-        // Controles básicos (1-5)
-        if window.is_key_pressed(KeyboardKey::KEY_ONE) { current_planet = 0; println!("Cambiado a: {}", planet_names[current_planet]); }
-        if window.is_key_pressed(KeyboardKey::KEY_TWO) { current_planet = 1; println!("Cambiado a: {}", planet_names[current_planet]); }
-        if window.is_key_pressed(KeyboardKey::KEY_THREE) { current_planet = 2; println!("Cambiado a: {}", planet_names[current_planet]); }
-        if window.is_key_pressed(KeyboardKey::KEY_FOUR) { current_planet = 3; println!("Cambiado a: {}", planet_names[current_planet]); }
-        if window.is_key_pressed(KeyboardKey::KEY_FIVE) { current_planet = 4; println!("Cambiado a: {}", planet_names[current_planet]); }
+        // --- Controles nuevos ---
+        if window.is_key_pressed(KeyboardKey::KEY_TAB) {
+            current_planet = (current_planet + 1) % planet_names.len();
+            println!("Cambiado a: {}", planet_names[current_planet]);
+        }
 
-        if window.is_key_pressed(KeyboardKey::KEY_SPACE) { auto_rotate = !auto_rotate; println!("Auto-rotación: {}", if auto_rotate { "ON" } else { "OFF" }); }
-        if window.is_key_down(KeyboardKey::KEY_RIGHT) { angle_y += 0.02; }
-        if window.is_key_down(KeyboardKey::KEY_LEFT)  { angle_y -= 0.02; }
-        if window.is_key_down(KeyboardKey::KEY_Q) { scale *= 1.02; }
-        if window.is_key_down(KeyboardKey::KEY_E) { scale /= 1.02; }
-        if window.is_key_pressed(KeyboardKey::KEY_S) {
+        if window.is_key_pressed(KeyboardKey::KEY_P) {
+            auto_rotate = !auto_rotate;
+            println!("Auto-rotación: {}", if auto_rotate { "ON" } else { "OFF" });
+        }
+
+        if window.is_key_down(KeyboardKey::KEY_A) {
+            angle_y -= 0.02;
+        }
+
+        if window.is_key_down(KeyboardKey::KEY_D) {
+            angle_y += 0.02;
+        }
+
+        if window.is_key_down(KeyboardKey::KEY_W) {
+            scale *= 1.02;
+        }
+
+        if window.is_key_down(KeyboardKey::KEY_S) {
+            scale /= 1.02;
+        }
+
+        if window.is_key_pressed(KeyboardKey::KEY_R) {
+            angle_y = 0.0;
+            scale = 1.5;
+            println!("Vista reiniciada");
+        }
+
+        if window.is_key_pressed(KeyboardKey::KEY_C) {
             fb.render_to_file("capture.png");
             println!("Captura guardada: capture.png");
         }
 
-        if auto_rotate { angle_y += 0.01; }
+        if auto_rotate {
+            angle_y += 0.01;
+        }
 
+        // --- Render principal ---
         let current_model = if current_planet == 2 { &model_crystal } else { &model_sphere };
 
         let rotated = transform_model(current_model, Vector3::new(0.0, 0.0, 0.0), angle_y, 0.0, scale);
@@ -139,7 +164,7 @@ fn main() {
             }
         }
 
-        // --- ✅ Corregido: separar el préstamo ---
+        // --- Render final ---
         let pixels: Vec<Color> = fb.image_data();
         let mut raw: Vec<u8> = Vec::with_capacity(pixels.len() * 4);
         for c in pixels {
@@ -158,12 +183,8 @@ fn main() {
             d.draw_texture(tex, 0, 0, Color::WHITE);
 
             d.draw_text(&planet_names[current_planet], 10, 10, 20, Color::WHITE);
-            d.draw_text(&format!("Modelo: {} | 1-5 Cambiar", planet_models[current_planet]), 10, 40, 14, Color::YELLOW);
             d.draw_text(
-                &format!(
-                    "SPACE Auto-rotar: {} | Q/E Zoom | ←→ Rotar",
-                    if auto_rotate { "ON" } else { "OFF" }
-                ),
+                "Controles: TAB planeta | P pausa | W/S zoom | A/D rotar | R reiniciar | C captura",
                 10,
                 570,
                 14,

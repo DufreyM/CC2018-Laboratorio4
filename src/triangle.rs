@@ -1,6 +1,6 @@
 use raylib::prelude::*;
 use crate::framebuffer::Framebuffer;
-use crate::shader::{roca, gas, cristal, lava, hielo};
+use crate::shader::{roca, gas, marciano, arcoiris, panqueques};
 
 #[derive(Copy, Clone)]
 pub enum ShaderType {
@@ -82,9 +82,9 @@ pub fn draw_filled_triangle(
                     let color = match shader_type {
                         ShaderType::Rocky => roca(&pos, &normal, time),
                         ShaderType::Gas => gas(&pos, &normal, time),
-                        ShaderType::Crystal => cristal(&pos, &normal, time),
-                        ShaderType::Lava => lava(&pos, &normal, time),
-                        ShaderType::Ice => hielo(&pos, &normal, time),
+                        ShaderType::Crystal => marciano(&pos, &normal, time),
+                        ShaderType::Lava => arcoiris(&pos, &normal, time),
+                        ShaderType::Ice => panqueques(&pos, &normal, time),
                     };
                     framebuffer.set_pixel_with_color(x, y, color);
                 }
