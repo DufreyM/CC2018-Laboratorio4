@@ -16,24 +16,25 @@ use std::f32::consts::PI;
 fn main() {
     let (mut window, thread) = raylib::init()
         .size(800, 600)
-        .title("Planetary Shader Lab - Versión IA")
+        .title("Laboratorio 4")
         .build();
 
     let mut fb = Framebuffer::new(800, 600, Color::new(5, 5, 15, 255));
 
-    // Cargar modelos
     println!("Cargando sphere-1.obj ...");
     let model_sphere = ObjModel::load("sphere-1.obj")
-        .expect("No se pudo cargar sphere-1.obj (coloca el OBJ en la carpeta del ejecutable)");
+        .expect("No se pudo cargar sphere-1.obj");
 
-    // Opcional: modelo específico (si no existe usamos esfera)
     let model_crystal = ObjModel::load("crystal_planet.obj").unwrap_or_else(|_| model_sphere.clone());
 
-    // Generar geometría procedural para luna y anillos
-    let moon_model = generate_moon(0.3, 24); // mejor resolución
+    let moon_model = generate_moon(0.3, 24);
     let rings_model = generate_rings(1.35, 2.1, 128);
 
-    println!("Modelos listos. Vertices luna: {}, anillos: {}", moon_model.vertices.len(), rings_model.vertices.len());
+    println!(
+        "Modelos listos. Vertices luna: {}, anillos: {}",
+        moon_model.vertices.len(),
+        rings_model.vertices.len()
+    );
 
     let mut angle_y = 0.0f32;
     let mut scale = 1.5f32;
@@ -49,7 +50,7 @@ fn main() {
         "Ätherblase (Gigante Gaseoso + Anillos)",
         "Kristallschloss (Cristal)",
         "Feuerglut (Lava)",
-        "Eispalast (Hielo)"
+        "Eispalast (Hielo)",
     ];
 
     let planet_models = vec![
@@ -57,7 +58,7 @@ fn main() {
         "sphere-1.obj + Anillos Procedurales",
         "crystal_planet.obj",
         "sphere-1.obj",
-        "sphere-1.obj"
+        "sphere-1.obj",
     ];
 
     println!("\n=== CONTROLES ===");
@@ -89,10 +90,8 @@ fn main() {
 
         let current_model = if current_planet == 2 { &model_crystal } else { &model_sphere };
 
-        // Transformación principal del planeta
         let rotated = transform_model(current_model, Vector3::new(0.0, 0.0, 0.0), angle_y, 0.0, scale);
 
-        // Seleccionar shader tipo
         let shader_type = match current_planet {
             0 => ShaderType::Rocky,
             1 => ShaderType::Gas,
@@ -101,7 +100,6 @@ fn main() {
             _ => ShaderType::Ice,
         };
 
-        // Dibujar polígonos del modelo
         for face in &current_model.faces {
             if face.len() < 3 { continue; }
             for i in 1..(face.len() - 1) {
@@ -112,7 +110,6 @@ fn main() {
             }
         }
 
-        // LUNA para planeta rocoso (procedural)
         if current_planet == 0 {
             let moon_distance = 2.5;
             let moon_x = orbital_angle.cos() * moon_distance;
@@ -129,7 +126,6 @@ fn main() {
             }
         }
 
-        // ANILLOS para gigante gaseoso (procedural)
         if current_planet == 1 {
             let rings_transformed = transform_model(&rings_model, Vector3::new(0.0, 0.0, 0.0), angle_y * 0.3, 0.35, scale);
             for face in &rings_model.faces {
@@ -143,35 +139,36 @@ fn main() {
             }
         }
 
-        // Texto + UI: actualizar textura cada frame (inicializar si necesario)
-        {
-            if fb.texture.is_none() {
-                fb.init_texture(&mut window, &thread);
-            }
+        // --- ✅ Corregido: separar el préstamo ---
+        let pixels: Vec<Color> = fb.image_data();
+        let mut raw: Vec<u8> = Vec::with_capacity(pixels.len() * 4);
+        for c in pixels {
+            raw.extend_from_slice(&[c.r, c.g, c.b, c.a]);
+        }
 
-            if let Some(tex) = &mut fb.texture {
-                // Obtener raw bytes desde el image buffer
-                let pixels: Vec<Color> = fb.image_data();
-                let mut raw: Vec<u8> = Vec::with_capacity(pixels.len() * 4);
-                for c in pixels {
-                    raw.push(c.r);
-                    raw.push(c.g);
-                    raw.push(c.b);
-                    raw.push(c.a);
-                }
+        if fb.texture.is_none() {
+            fb.init_texture(&mut window, &thread);
+        }
 
-                // update_texture_rec no existe exactamente igual; Raylib-rs expone update_texture
-                // Aquí usamos el método update_texture (si tu binding lo provee). Si no, recrea textura.
-                tex.update_texture(&raw);
+        if let Some(tex) = &mut fb.texture {
+            tex.update_texture(&raw);
 
-                let mut d = window.begin_drawing(&thread);
-                d.clear_background(Color::BLACK);
-                d.draw_texture(&fb.texture.as_ref().unwrap(), 0, 0, Color::WHITE);
+            let mut d = window.begin_drawing(&thread);
+            d.clear_background(Color::BLACK);
+            d.draw_texture(tex, 0, 0, Color::WHITE);
 
-                d.draw_text(&planet_names[current_planet], 10, 10, 20, Color::WHITE);
-                d.draw_text(&format!("Modelo: {} | 1-5 Cambiar", planet_models[current_planet]), 10, 40, 14, Color::YELLOW);
-                d.draw_text(&format!("SPACE Auto-rotar: {} | Q/E Zoom | ←→ Rotar", if auto_rotate { "ON" } else { "OFF" }), 10, 570, 14, Color::LIGHTGRAY);
-            }
+            d.draw_text(&planet_names[current_planet], 10, 10, 20, Color::WHITE);
+            d.draw_text(&format!("Modelo: {} | 1-5 Cambiar", planet_models[current_planet]), 10, 40, 14, Color::YELLOW);
+            d.draw_text(
+                &format!(
+                    "SPACE Auto-rotar: {} | Q/E Zoom | ←→ Rotar",
+                    if auto_rotate { "ON" } else { "OFF" }
+                ),
+                10,
+                570,
+                14,
+                Color::LIGHTGRAY,
+            );
         }
     }
 

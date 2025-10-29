@@ -1,6 +1,6 @@
 use raylib::prelude::*;
 use crate::framebuffer::Framebuffer;
-use crate::shader::{rocky_planet_shader, gas_giant_shader, crystal_planet_shader, lava_planet_shader, ice_planet_shader};
+use crate::shader::{roca, gas, cristal, lava, hielo};
 
 #[derive(Copy, Clone)]
 pub enum ShaderType {
@@ -80,11 +80,11 @@ pub fn draw_filled_triangle(
 
                     // Aplicar shader según tipo (usamos normal de cara)
                     let color = match shader_type {
-                        ShaderType::Rocky => rocky_planet_shader(&pos, &normal, time),
-                        ShaderType::Gas => gas_giant_shader(&pos, &normal, time),
-                        ShaderType::Crystal => crystal_planet_shader(&pos, &normal, time),
-                        ShaderType::Lava => lava_planet_shader(&pos, &normal, time),
-                        ShaderType::Ice => ice_planet_shader(&pos, &normal, time),
+                        ShaderType::Rocky => roca(&pos, &normal, time),
+                        ShaderType::Gas => gas(&pos, &normal, time),
+                        ShaderType::Crystal => cristal(&pos, &normal, time),
+                        ShaderType::Lava => lava(&pos, &normal, time),
+                        ShaderType::Ice => hielo(&pos, &normal, time),
                     };
                     framebuffer.set_pixel_with_color(x, y, color);
                 }
