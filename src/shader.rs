@@ -9,136 +9,226 @@ use raylib::prelude::*;
 // ---------- CONFIG BÁSICA ----------
 const MAX_LAYERS: usize = 4;
 
-// ---------- PLANETA ROCOSO (roca) ----------
+// ---------- UTILIDADES DE CAPAS ----------
+fn blend_layered(mut base: Color, layers: &[(Color, f32)]) -> Color {
+    // layers: (color, weight) - se mezclan sobre base según weights normalizados
+    let mut total_weight = 0.0;
+    for &(_, w) in layers.iter() { total_weight += w.max(0.0); }
+    if total_weight <= 0.0 { return base; }
+    for &(col, w) in layers.iter() {
+        let a = (w / total_weight).clamp(0.0, 1.0);
+        base = blend_colors(base, col, a);
+    }
+    base
+}
+
+fn apply_emissive(base: Color, emissive: Color, strength: f32) -> Color {
+    // simplistic additive emissive (clamped)
+    let r = (base.r as f32 + emissive.r as f32 * strength).clamp(0.0, 255.0) as u8;
+    let g = (base.g as f32 + emissive.g as f32 * strength).clamp(0.0, 255.0) as u8;
+    let b = (base.b as f32 + emissive.b as f32 * strength).clamp(0.0, 255.0) as u8;
+    Color::new(r, g, b, 255)
+}
+
+fn ring_mask(pos: &Vector3, inner: f32, outer: f32, tilt: f32) -> f32 {
+    // pos: coordenadas en esfera; plane tilt en radianes. Regresa alpha 0..1 para anillo
+    // proyectamos en plano ecuatorial rotado por tilt (simple)
+    let x = pos.x;
+    let z = pos.z * tilt.cos() - pos.y * tilt.sin(); // pequeña rotación para simular inclinación
+    let r = (x * x + z * z).sqrt();
+    smoothstep(inner, outer, r) * (1.0 - smoothstep(inner + 0.01, outer - 0.01, r)) // máscara suave
+}
+
+// ---------- EFECTO ATMOSFÉRICO GENERAL ----------
+fn apply_atmosphere(color: Color, pos: &Vector3, normal: &Vector3, time: f32) -> Color {
+    let view_dir = Vector3::new(0.0, 0.0, 1.0);
+    let rim = fresnel(normal, view_dir, 2.5);
+    let altitude = (1.0 - pos.length()).clamp(0.0, 1.0);
+    let haze = (rim * 0.6 + altitude * 0.4).powf(1.5);
+    let haze_color = Color::new(180, 210, 255, 255);
+    blend_colors(color, haze_color, haze * 0.15 + (time * 0.1).sin().abs() * 0.05)
+}
+
+// ---------- PLANETA ROCOSO DETALLADO (AHORA 4 CAPAS + LAVA) ----------
 pub fn roca(pos: &Vector3, normal: &Vector3, time: f32) -> Color {
-    // Capa 0: gradiente base según latitud
-    let latitude = (pos.y).clamp(-1.0, 1.0) * 0.5 + 0.5; // 0..1
-    let base_low = Color::new(70, 50, 40, 255);
-    let base_high = Color::new(150, 130, 110, 255);
-    let mut col = lerp_color(base_low, base_high, latitude);
+    // Capa base: latitud + gradiente
+    let latitude = (pos.y).clamp(-1.0, 1.0) * 0.5 + 0.5;
+    let base_col = lerp_color(Color::new(40, 30, 25, 255), Color::new(210, 170, 120, 255), latitude);
 
-    // Capa 1: detalle rocoso con FBM (pequeñas montañas y grietas)
-    let mountain = fbm_noise(pos.x * 6.0, pos.z * 6.0 + time * 0.01, 5);
-    let rock_layer = lerp_color(Color::new(90, 70, 60, 255), Color::new(120, 100, 90, 255), mountain);
-    col = blend_colors(col, rock_layer, smoothstep(0.2, 0.8, mountain) * 0.8);
+    // Generamos 4 capas con pesos dinámicos:
+    let relief = fbm_noise(pos.x * 8.0, pos.z * 8.0 + time * 0.02, 5);
+    let veins = fbm_noise(pos.x * 24.0, pos.z * 24.0, 4).powf(1.2);
+    let rust = fbm_noise(pos.x * 10.0, pos.z * 10.0, 3).powf(2.8);
+    let moss = smoothstep(0.3, 0.8, relief) * (1.0 - latitude);
 
-    // Capa 2: sedimentos / polvo (sutil, encima de montañas)
-    let sediment = fbm_noise(pos.x * 12.0, pos.z * 12.0, 3).powf(2.0);
-    let sediment_col = Color::new(200, 170, 140, 255);
-    col = blend_colors(col, sediment_col, sediment * 0.25);
+    let layer0 = (lerp_color(Color::new(90, 60, 50, 255), Color::new(240, 210, 180, 255), relief.powf(1.6)), 0.5); // rocas claras/obscuras
+    let layer1 = (blend_colors(Color::new(255, 230, 200, 255), Color::new(190, 80, 40, 255), veins), 0.25); // vetas / óxidos
+    let layer2 = (Color::new(60, 100, 70, 255), moss * 0.8); // musgo húmedo
+    // capa 3: salpicaduras de material fundido (lava superficial)
+    let lava_noise = fbm_noise(pos.x * 6.0, pos.z * 6.0 + time * 0.12, 4);
+    let lava_mask = ridge(lava_noise).powf(2.0) * (1.0 - latitude).max(0.0);
+    let lava_color = Color::new(255, 120, 40, 255);
+    let layer3 = (lava_color, lava_mask * 0.8);
 
-    // Capa 3: nubes o neblina de altura (transparente)
-    let clouds = fbm_noise(pos.x * 3.0 + time * 0.03, pos.z * 3.0 + time * 0.02, 4);
-    col = blend_colors(col, Color::new(235, 235, 235, 255), clouds.powf(3.0) * 0.35);
+    let mut col = blend_layered(base_col, &[layer0, layer1, layer2, layer3]);
 
-    // Iluminación (perturbar normal con ruido para detalle)
-    let pert = perturb_normal(normal, pos, 0.6);
-    let shaded = shading(col, &pert, Vector3::new(0.6, 0.9, 0.3).normalized(), 32.0, 0.25);
+    // aplicar pequeñas grietas y brillo ecuatorial
+    let cracks = fbm_noise(pos.x * 30.0, pos.z * 30.0, 4).powf(1.8);
+    col = blend_colors(col, Color::new(30, 20, 18, 255), cracks * 0.25);
 
-    // AO approximado y vignetting por poles
-    let ao = 1.0 - fbm_noise(pos.x * 8.0, pos.z * 8.0, 3) * 0.25;
-    apply_brightness(shaded, ao)
+    // Emissive por lava: usar lava_mask para sumarlo
+    let emissive_strength = (lava_mask * 2.0).clamp(0.0, 1.5);
+    col = apply_emissive(col, Color::new(255, 80, 30, 255), emissive_strength);
+
+    // Normal perturb y shading
+    let pert = perturb_normal(normal, pos, 1.0);
+    let light_dir = Vector3::new(0.6, 0.8, 0.5).normalized();
+    let shaded = shading(col, &pert, light_dir, 64.0, 0.5);
+
+    apply_atmosphere(shaded, pos, normal, time)
 }
 
-// ---------- PLANETA GASEOSO (gas) ----------
+// ---------- PLANETA GASEOSO DETALLADO (BANDAS + ANILLO) ----------
 pub fn gas(pos: &Vector3, normal: &Vector3, time: f32) -> Color {
-    // Capa 0: gradiente radial (más pálido hacia el borde)
     let r = pos.length().clamp(0.0, 1.0);
-    let gradient = (1.0 - r).clamp(0.0, 1.0);
-    let base_a = Color::new(20, 30, 80, 255);
-    let base_b = Color::new(150, 180, 220, 255);
-    let mut col = lerp_color(base_a, base_b, gradient);
+    let gradient = (1.0 - r).powf(0.5);
 
-    // Capa 1: bandas en la atmósfera (smoothed noise + sin)
-    let band_noise = fbm_noise(pos.x * 4.0, pos.y * 3.0 + time * 0.1, 5);
-    let bands = (pos.y * 6.0 + band_noise * 2.0).sin().abs();
-    col = blend_colors(col, Color::new(200, 220, 240, 255), bands * 0.35);
+    // Base suave (gradiente radial + tendencia giratoria)
+    let base_col = lerp_color(Color::new(10, 20, 60, 255), Color::new(220, 200, 160, 255), gradient);
 
-    // Capa 2: remolinos (swirls)
-    let swirl = ((pos.x * 3.0 + pos.y * 2.0 + time * 0.2).sin() * 0.5 + 0.5).powf(1.4);
-    col = blend_colors(col, Color::new(220, 200, 100, 255), swirl * 0.25);
+    // Bandas primarias (hasta 3 capas de bandas)
+    let band_noise = fbm_noise(pos.y * 3.0 + time * 0.08, pos.x * 3.0, 6);
+    let bands_a = ((pos.y * 10.0 + band_noise * 4.0).sin() * 0.5 + 0.5).powf(1.6);
+    let band_col_a = lerp_color(Color::new(255, 180, 90, 255), Color::new(180, 230, 255, 255), band_noise);
 
-    // Capa 3: halo translúcido (simula scattering cerca del terminador)
-    let rim = fresnel(normal, Vector3::new(0.0, 0.0, 1.0), 1.0).powf(2.0);
-    col = blend_colors(col, Color::new(255, 245, 220, 255), rim * 0.25);
+    let band_noise2 = fbm_noise(pos.y * 6.0 - time * 0.12, pos.z * 2.0, 5);
+    let bands_b = ((pos.y * 6.0 + band_noise2 * 2.0).cos() * 0.5 + 0.5).powf(1.3);
+    let band_col_b = lerp_color(Color::new(120, 80, 200, 255), Color::new(240, 220, 200, 255), band_noise2);
 
-    // Iluminación suave + specular ancho para gas
-    let pert = perturb_normal(normal, pos, 0.3);
-    shading(col, &pert, Vector3::new(0.3, 0.7, 0.8).normalized(), 8.0, 0.12)
+    // Nubes / remolinos locales
+    let swirl = fbm_noise(pos.x * 12.0 + time * 0.4, pos.z * 12.0, 5).powf(1.3);
+    let swirl_col = Color::new(255, 245, 210, 255);
+
+    // Capa de neblina
+    let haze_layer = (1.0 - r).powf(2.0) * 0.25;
+
+    // Armamos capas (hasta 4)
+    let layers = [
+        (band_col_a, bands_a * 0.9),
+        (band_col_b, bands_b * 0.5),
+        (swirl_col, swirl * 0.4),
+        (Color::new(180, 210, 255, 255), haze_layer), // alta atmósfera ligera
+    ];
+
+    let mut col = blend_layered(base_col, &layers);
+
+    // Anillo: calculamos máscara y pintamos un anillo con gradiente y polvo
+    let ring_alpha = ring_mask(pos, 1.05, 1.35, (time * 0.03 + 0.3).sin().abs() * 0.3 + 0.7);
+    if ring_alpha > 0.0001 {
+        // color del anillo: polvo + bandas
+        let ring_noise = fbm_noise(pos.x * 80.0 + time * 0.6, pos.z * 60.0, 4);
+        let ring_base = lerp_color(Color::new(220, 200, 170, 255), Color::new(120, 100, 80, 255), ring_noise);
+        col = blend_colors(col, ring_base, ring_alpha * 0.85);
+    }
+
+    // Añadir brillo equatorial sutil
+    col = blend_colors(col, Color::new(255, 255, 240, 255), ((1.0 - pos.y.abs()).powf(6.0)) * 0.06);
+
+    // Perturbación menor (gaseoso suave)
+    let pert = perturb_normal(normal, pos, 0.18);
+    let shaded = shading(col, &pert, Vector3::new(0.4, 0.8, 0.9).normalized(), 20.0, 0.18);
+
+    apply_atmosphere(shaded, pos, normal, time)
 }
 
-// ---------- MARCIANO (emissive veins + colores) ----------
+// ---------- MARCIANO MEJORADO (NOVEDAD: cristales/biolumin + campos magnéticos) ----------
 pub fn marciano(pos: &Vector3, normal: &Vector3, time: f32) -> Color {
-    // Capa 0: base rojiza con variación por ruido
     let base_noise = fbm_noise(pos.x * 6.0, pos.z * 6.0 + time * 0.02, 4);
-    let mut col = lerp_color(Color::new(150, 40, 30, 255), Color::new(240, 90, 60, 255), base_noise);
+    let mut col = lerp_color(Color::new(140, 30, 25, 255), Color::new(250, 100, 70, 255), base_noise);
 
-    // Capa 1: venas emisivas (verde neón) siguiendo ruido agudo
-    let veins = ridge(fbm_noise(pos.x * 20.0, pos.z * 20.0 + time * 0.1, 3));
-    col = blend_colors(col, Color::new(0, 255, 120, 255), veins * 0.6);
+    // Vetas emisivas y pulsantes (bioluminiscencia sub-superficial)
+    let veins = ridge(fbm_noise(pos.x * 22.0, pos.z * 22.0 + time * 0.15, 3));
+    let pulsation = ((time * 2.2 + pos.y * 4.0).sin() * 0.5 + 0.5).powf(2.0);
+    let emissive_col = Color::new(0, 255, 160, 255);
+    col = blend_colors(col, emissive_col, veins * (0.45 + pulsation * 0.55));
 
-    // Capa 2: manchas oscuras de cráteres
-    let craters = fbm_noise(pos.x * 3.0 + time * 0.05, pos.z * 3.0, 4);
-    col = blend_colors(col, Color::new(60, 30, 25, 255), smoothstep(0.4, 0.8, craters) * 0.45);
+    // Magma superficial
+    let magma = fbm_noise(pos.x * 4.0, pos.z * 4.0, 3);
+    col = blend_colors(col, Color::new(255, 80, 50, 255), magma.powf(3.0) * 0.2);
 
-    // Capa 3: brillo pulsante local (emissive subtle)
-    let pulse = ((time * 3.0 + pos.y * 6.0).sin() * 0.5 + 0.5).powf(3.0);
-    let emissive = blend_colors(col, Color::new(255, 200, 120, 255), pulse * 0.12);
+    // NUEVO: cristales reflectivos (puntos brillantes con normal perturb fuerte)
+    let crystal_noise = fbm_noise(pos.x * 40.0 + time * 0.9, pos.z * 40.0, 3);
+    let crystals = smoothstep(0.85, 0.98, crystal_noise);
+    let crystal_col = Color::new(200, 230, 255, 255);
+    col = blend_colors(col, crystal_col, crystals * 0.9);
 
-    // Iluminación y specular moderado
-    let pert = perturb_normal(normal, pos, 0.4);
-    shading(emissive, &pert, Vector3::new(0.4, 0.9, 0.2).normalized(), 20.0, 0.18)
+    // NUEVO: sutil campo magnético visual como halo cercano al ecuador (efecto glow)
+    let mag_field = (pos.y * 6.0 + (time * 0.5).sin() * 0.5).sin().abs();
+    col = blend_colors(col, Color::new(90, 200, 160, 255), mag_field * 0.035);
+
+    // Polvo marciano
+    let dust = (1.0 - pos.y.abs()).powf(3.0);
+    col = blend_colors(col, Color::new(80, 40, 30, 255), dust * 0.12);
+
+    let pert = perturb_normal(normal, pos, 0.55);
+    // Para cristales dejamos specular más alto localmente: aumentamos specular si crystals > 0
+    let specular_strength = 0.2 + crystals * 0.6;
+    let shaded = shading(col, &pert, Vector3::new(0.5, 0.9, 0.2).normalized(), 36.0, specular_strength);
+
+    apply_atmosphere(shaded, pos, normal, time)
 }
 
-// ---------- PANQUEQUES (banded planet con textura) ----------
+// ---------- PANQUEQUES MÁS TEXTURADO Y CAPAS (mantequilla, syrup, grano, crema) ----------
 pub fn panqueques(pos: &Vector3, normal: &Vector3, time: f32) -> Color {
-    // Capa 0: bandas concentricas suaves según radio
     let radio = (pos.x * pos.x + pos.z * pos.z).sqrt();
-    let bands = (radio * 6.0 + fbm_noise(pos.x * 4.0, pos.z * 4.0, 3) * 0.6).fract();
     let base1 = Color::new(200, 150, 90, 255);
-    let base2 = Color::new(250, 200, 120, 255);
-    let mut col = lerp_color(base1, base2, smoothstep(0.0, 1.0, bands));
+    let base2 = Color::new(255, 210, 130, 255);
 
-    // Capa 1: grietas sutiles
-    let cracks = fbm_noise(pos.x * 15.0, pos.z * 15.0, 4);
-    col = blend_colors(col, Color::new(120, 80, 50, 255), cracks * 0.15);
+    // Anillos concéntricos (capas de panqueque)
+    let bands = (radio * 7.0 + fbm_noise(pos.x * 4.0, pos.z * 4.0, 4) * 0.6).fract();
+    let pancake_base = lerp_color(base1, base2, smoothstep(0.0, 1.0, bands));
 
-    // Capa 2: borde más brillante (specular pancake)
-    col = blend_colors(col, Color::new(255, 240, 200, 255), powf(normal.dot(Vector3::new(0.5, 0.9, 0.3).normalized()).max(0.0), 50.0) * 0.25);
+    // texturas: grano, quemado, syrup
+    let cracks = fbm_noise(pos.x * 18.0, pos.z * 18.0, 5).powf(1.0);
+    let grain = fbm_noise(pos.x * 60.0, pos.z * 60.0, 3).powf(1.2);
+    let syrup = fbm_noise(pos.x * 6.0 + time * 0.15, pos.z * 6.0, 4);
 
-    // Capa 3: sombra radial ligera hacia el ecuador
-    let eq_shadow = (1.0 - (pos.y.abs()).clamp(0.0, 1.0)).powf(2.0);
-    col = blend_colors(col, Color::new(80, 60, 40, 255), eq_shadow * 0.12);
+    // capas:
+    let layer_butter = (Color::new(255, 240, 180, 255), (1.0 - pos.y.abs()).powf(3.0) * 0.35);
+    let layer_syrup = (Color::new(130, 60, 30, 255), syrup.powf(1.5) * 0.45);
+    let layer_grain = (Color::new(100, 70, 50, 255), grain * 0.25);
+    let layer_base = (pancake_base, 0.9);
 
-    let pert = perturb_normal(normal, pos, 0.25);
-    shading(col, &pert, Vector3::new(0.5, 0.8, 0.3).normalized(), 40.0, 0.2)
+    let mut col = blend_layered(pancake_base, &[layer_base, layer_butter, layer_syrup, layer_grain]);
+
+    // Grietas y sombras locales
+    col = blend_colors(col, Color::new(80, 50, 30, 255), cracks * 0.18);
+
+    let pert = perturb_normal(normal, pos, 0.32);
+    let shaded = shading(col, &pert, Vector3::new(0.5, 0.8, 0.3).normalized(), 36.0, 0.25);
+
+    apply_atmosphere(shaded, pos, normal, time)
 }
 
-// ---------- ARCOÍRIS (suave, muchas capas de color) ----------
+// ---------- ARCOÍRIS (se mantiene, ligero ajuste para capas) ----------
 pub fn arcoiris(pos: &Vector3, normal: &Vector3, time: f32) -> Color {
-    // Capa 0: rotación circular de colores (gradiente continuo)
-    let angle = pos.y.atan2(pos.x) + time * 0.8;
+    let angle = pos.y.atan2(pos.x) + time * 0.7;
     let mut t = (angle / std::f32::consts::PI) % 2.0;
     if t < 0.0 { t += 2.0; }
-    t *= 0.5; // 0..1
+    t *= 0.5;
 
-    // base suave usando un polinomial para transiciones más suaves
     let col0 = rainbow_gradient(t);
 
-    // Capa 1: brillo angular (specular colored)
-    let rim = fresnel(normal, Vector3::new(0.0, 0.0, 1.0), 1.0);
-    let spec_col = apply_brightness(col0, rim * 1.2 + 0.8);
+    let rim = fresnel(normal, Vector3::new(0.0, 0.0, 1.0), 1.5);
+    let rim_col = rainbow_gradient(((t + time * 0.2).sin() * 0.5 + 0.5) % 1.0);
+    let rimmed = blend_colors(col0, rim_col, rim * 0.5);
 
-    // Capa 2: bandas finas para acentuar el arco
-    let bands = (pos.y * 12.0 + fbm_noise(pos.x * 8.0, pos.z * 8.0, 3) * 3.0).sin().abs();
-    let layered = blend_colors(spec_col, Color::new(255, 255, 255, 255), bands * 0.18);
+    let pulse = ((time * 1.2).sin() * 0.5 + 0.5).powf(3.0);
+    let layered = blend_colors(rimmed, Color::new(255, 255, 255, 255), pulse * 0.1);
 
-    // Capa 3: sutil brillo global
-    let global_glow = (1.0 - pos.length()).clamp(0.0, 1.0).powf(1.5);
-    let final_col = blend_colors(layered, Color::new(255, 240, 255, 255), global_glow * 0.08);
-
-    let pert = perturb_normal(normal, pos, 0.2);
-    shading(final_col, &pert, Vector3::new(0.5, 0.7, 0.3).normalized(), 64.0, 0.06)
+    let pert = perturb_normal(normal, pos, 0.25);
+    let shaded = shading(layered, &pert, Vector3::new(0.5, 0.7, 0.3).normalized(), 64.0, 0.08);
+    apply_atmosphere(shaded, pos, normal, time)
 }
 
 /* ---------------- UTILIDADES AVANZADAS ---------------- */
