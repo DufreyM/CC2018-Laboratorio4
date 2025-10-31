@@ -70,7 +70,6 @@ fn main() {
         time += 0.016;
         orbital_angle += 0.02;
 
-        // --- Controles nuevos ---
         if window.is_key_pressed(KeyboardKey::KEY_TAB) {
             current_planet = (current_planet + 1) % planet_names.len();
             println!("Cambiado a: {}", planet_names[current_planet]);

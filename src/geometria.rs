@@ -8,12 +8,12 @@ pub fn generate_moon(radius: f32, segments: u32) -> ObjModel {
     let mut faces = Vec::new();
 
     for lat in 0..=segments {
-        let theta = lat as f32 * PI / segments as f32; // 0..π
+        let theta = (lat as f32 * PI) / segments as f32; // 0..π
         let sin_theta = theta.sin();
         let cos_theta = theta.cos();
 
         for lon in 0..=segments {
-            let phi = lon as f32 * 2.0 * PI / segments as f32;
+            let phi = (lon as f32 * 2.0 * PI) / segments as f32;
             let sin_phi = phi.sin();
             let cos_phi = phi.cos();
 
@@ -28,7 +28,8 @@ pub fn generate_moon(radius: f32, segments: u32) -> ObjModel {
     for lat in 0..segments {
         for lon in 0..segments {
             let current = (lat * (segments + 1) + lon) as usize;
-            let next = (current + segments as usize + 1) as usize;
+            let next = current + (segments + 1) as usize;
+
             faces.push(vec![current, next, current + 1]);
             faces.push(vec![current + 1, next, next + 1]);
         }
@@ -37,16 +38,15 @@ pub fn generate_moon(radius: f32, segments: u32) -> ObjModel {
     ObjModel { vertices, faces }
 }
 
-/// Genera anillos como un disco con agujero (plano XZ). Retorna triángulos.
+/// Genera anillos como un disco con agujero (plano XZ)
 pub fn generate_rings(inner_radius: f32, outer_radius: f32, segments: u32) -> ObjModel {
     let mut vertices = Vec::new();
     let mut faces = Vec::new();
 
-    // Generamos dos anillos (círculos) con (segments+1) vértices cada uno
-    for ring in 0..=1 {
-        let radius = if ring == 0 { inner_radius } else { outer_radius };
+    // Generamos dos anillos (círculos)
+    for radius in [inner_radius, outer_radius] {
         for i in 0..=segments {
-            let angle = i as f32 * 2.0 * PI / segments as f32;
+            let angle = (i as f32 * 2.0 * PI) / segments as f32;
             let x = radius * angle.cos();
             let z = radius * angle.sin();
             vertices.push(Vector3::new(x, 0.0, z));
@@ -66,7 +66,7 @@ pub fn generate_rings(inner_radius: f32, outer_radius: f32, segments: u32) -> Ob
     ObjModel { vertices, faces }
 }
 
-/// Aplica transformaciones simples (rotación en Y y X, escala y traslación)
+/// Aplica rotaciones en X, Y, escala y traslación
 pub fn transform_model(
     model: &ObjModel,
     translation: Vector3,
@@ -74,21 +74,25 @@ pub fn transform_model(
     rotation_x: f32,
     scale: f32,
 ) -> Vec<Vector3> {
-    model.vertices.iter().map(|v| {
-        let mut x = v.x * scale;
-        let mut y = v.y * scale;
-        let mut z = v.z * scale;
+    model
+        .vertices
+        .iter()
+        .map(|v| {
+            let (mut x, mut y, mut z) = (v.x * scale, v.y * scale, v.z * scale);
 
-        // Rotación en X
-        let ry = y * rotation_x.cos() - z * rotation_x.sin();
-        let rz = y * rotation_x.sin() + z * rotation_x.cos();
-        y = ry; z = rz;
+            // Rotación en X
+            let new_y = y * rotation_x.cos() - z * rotation_x.sin();
+            let new_z = y * rotation_x.sin() + z * rotation_x.cos();
+            y = new_y;
+            z = new_z;
 
-        // Rotación en Y
-        let rx = x * rotation_y.cos() + z * rotation_y.sin();
-        let rz2 = -x * rotation_y.sin() + z * rotation_y.cos();
-        x = rx; z = rz2;
+            // Rotación en Y
+            let new_x = x * rotation_y.cos() + z * rotation_y.sin();
+            let new_z2 = -x * rotation_y.sin() + z * rotation_y.cos();
+            x = new_x;
+            z = new_z2;
 
-        Vector3::new(x + translation.x, y + translation.y, z + translation.z)
-    }).collect()
+            Vector3::new(x + translation.x, y + translation.y, z + translation.z)
+        })
+        .collect()
 }
